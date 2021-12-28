@@ -1,8 +1,9 @@
 extends GDScript
+class_name string_manip
 
-var regex = RegEx.new()
 
-func str_extract(string:String,pattern:String):
+static func str_extract(string:String,pattern:String):
+	var regex = RegEx.new()
 	regex.compile(pattern)
 	var result:RegExMatch = regex.search(string)
 	if result == null:
@@ -10,14 +11,16 @@ func str_extract(string:String,pattern:String):
 	else:
 		return  result.get_string()
 
-func str_extract_all(string:String,pattern:String)->Array:
+static func str_extract_all(string:String,pattern:String)->Array:
+	var regex = RegEx.new()
 	var out:Array
 	regex.compile(pattern)
 	for x in regex.search_all(string):
 		out.append(x.get_string())
 	return(out)
 
-func str_detect(string:String, pattern:String)-> bool:
+static func str_detect(string:String, pattern:String)-> bool:
+	var regex = RegEx.new()
 	var out:bool
 	regex.compile(pattern)
 	var result:RegExMatch = regex.search(string)
@@ -25,7 +28,7 @@ func str_detect(string:String, pattern:String)-> bool:
 
 
 # vectorized over an array of strings to return indexes of matching
-func strs_detect(strings:Array,pattern:String)->Array:
+static func strs_detect(strings:Array,pattern:String)->Array:
 	var out:Array
 	for i in range(strings.size()):
 		if str_detect(strings[i],pattern):

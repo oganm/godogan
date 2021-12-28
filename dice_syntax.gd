@@ -1,15 +1,14 @@
 extends GDScript
+class_name dice_syntax
 
 
-var sm = preload('string_manip.gd').new()
-var al = preload('array_logic.gd').new()
-var rng = RandomNumberGenerator.new()
 
-func _ready():
-	rng.randomize()
 
-func dice_parser(dice_string:String)->Dictionary:
-	var rolling_rules: Dictionary = {}
+static func dice_parser(dice_string:String)->Dictionary:
+	var sm = string_manip
+	var al = array_logic
+	
+	var rolling_rules: Dictionary = {'error': false, 'msg': []}
 	var valid_tokens = '[dksr!]'
 	
 	dice_string = dice_string.to_lower()
@@ -21,13 +20,14 @@ func dice_parser(dice_string:String)->Dictionary:
 		rolling_rules['dice_count'] = 0
 		rolling_rules['dice_side'] = 0
 		rolling_rules['sort'] = false
-		rolling_rules['explode'] = 0
+		rolling_rules['explode'] = []
+		rolling_rules['compound'] = []
 		return rolling_rules
 	
 	
 	# get the dice count or default to 1 if we just start with d.
 	var result = sm.str_extract(dice_string,'^[0-9]*?(?=d)')
-	assert_error(result!=null,'Malformed dice string')
+	dice_error(result!=null,'Malformed dice string',rolling_rules)
 	if result == '':
 		rolling_rules['dice_count'] = 1
 	elif result.is_valid_integer():
@@ -41,7 +41,7 @@ func dice_parser(dice_string:String)->Dictionary:
 	valid_tokens + '.*?((?=' + valid_tokens + ')|$)')
 	
 	var dice_side = sm.str_extract(tokens[0],'(?<=d)[0-9]+')
-	assert_error(dice_side != null, "Malformed dice string")
+	dice_error(dice_side != null, "Malformed dice string",rolling_rules)
 	rolling_rules['dice_side'] = int(dice_side)
 	# remove dice side token to make sure it's not confused with the drop rule
 	tokens.remove(0)
@@ -54,7 +54,7 @@ func dice_parser(dice_string:String)->Dictionary:
 	
 	# check for drop rules, there can only be one 
 	var drop_rules = sm.strs_detect(tokens,'^(d|k)(h|l)?[0-9]+$')
-	assert_error(drop_rules.size() <= 1,"Malformed dice string: Can't include more than one drop rule")
+	dice_error(drop_rules.size() <= 1,"Malformed dice string: Can't include more than one drop rule",rolling_rules)
 	if drop_rules.size() == 0:
 		rolling_rules['drop_dice'] = 0
 		rolling_rules['drop_lowest'] = true
@@ -74,7 +74,7 @@ func dice_parser(dice_string:String)->Dictionary:
 	var reroll_rules = sm.strs_detect(tokens,'r(?!o)')
 	var reroll:Array = []
 	for i in reroll_rules:
-		reroll.append_array(reroll_determine(tokens[i], rolling_rules['dice_side']))
+		reroll.append_array(range_determine(tokens[i], rolling_rules['dice_side']))
 	var dicePossibilities = range(1,rolling_rules['dice_side']+1)
 	if al.all(al.array_in_array(dicePossibilities,reroll)):
 		push_error('Malformed dice string: rerolling all results')
@@ -90,7 +90,7 @@ func dice_parser(dice_string:String)->Dictionary:
 	reroll_rules = sm.strs_detect(tokens,'ro')
 	var reroll_once:Array = []
 	for i in reroll_rules:
-		reroll_once.append_array(reroll_determine(tokens[i], rolling_rules['dice_side']))
+		reroll_once.append_array(range_determine(tokens[i], rolling_rules['dice_side']))
 	rolling_rules['reroll_once'] = reroll_once
 	
 	reroll_rules.invert()
@@ -98,29 +98,39 @@ func dice_parser(dice_string:String)->Dictionary:
 		tokens.remove(i)
 	
 	
-	# explode rules
-	var explode_rules = al.which(al.array_in_array(tokens,['!']))
-	if explode_rules.size()>2:
-		push_error("Malformed dice string: Can't have more than 2 !s for exploding dice")
-		rolling_rules['explode'] = 0
-	else:
-		rolling_rules['explode'] = explode_rules.size()
+	print(rolling_rules)
+	# new explode rules
+	var explode_rules = sm.strs_detect(tokens,'!')
+	var explode:Array = []
+	var compound: Array = []
+	var compound_flag:bool = false
+	for i in explode_rules:
+		if i != INF:
+			if tokens[i] == '!' and i+1 in explode_rules:
+				compound_flag = true
+			elif not compound_flag:
+				explode.append_array(range_determine(tokens[i], rolling_rules['dice_side'],rolling_rules['dice_side']))
+			elif compound_flag:
+				compound_flag = false
+				compound.append_array(range_determine(tokens[i], rolling_rules['dice_side'],rolling_rules['dice_side']))
+	rolling_rules['explode'] = explode
+	rolling_rules['compound'] = compound
 	explode_rules.invert()
 	for i in explode_rules:
 		tokens.remove(i)
 	
-	if tokens.size()>0:
-		push_error('Malformed dice string: Unprocessed tokens')
-	
+	dice_error(tokens.size()==0, 'Malformed dice string: Unprocessed tokens',rolling_rules)
+	print(rolling_rules)
 	return rolling_rules
 
-func reroll_determine(token:String,dice_side:int)->Array:
+static func range_determine(token:String,dice_side:int, default:int = 1)->Array:
+	var sm = string_manip
 	var out:Array = []
 	var number = sm.str_extract(token, '[0-9]*$')
-	assert_error(!(sm.str_detect(token,'<|>') and number ==''),'Malformed dice string: Rerolling with "<" or ">" identifiers requires an integer')
-	assert_error(!(sm.str_detect(token,'<') and sm.str_detect(token,'>')),'Malformed dice string: Single rerolling clause can only have one of "<" or ">"')
+	# dice_error(!(sm.str_detect(token,'<|>') and number ==''),'Malformed dice string: Using  "<" or ">" identifiers requires an integer',rolling_rules)
+	# dice_error(!(sm.str_detect(token,'<') and sm.str_detect(token,'>')),'Malformed dice string: A range clause can only have one of "<" or ">"',rolling_rules)
 	if !sm.str_detect('<|>',token) and number == '':
-		out.append(1)
+		out.append(default)
 	elif number != '' and !sm.str_detect(token, '<|>'):
 		out.append(int(number))
 	elif sm.str_detect(token, '<') and number != '':
@@ -130,12 +140,15 @@ func reroll_determine(token:String,dice_side:int)->Array:
 	
 	return out
 
-func assert_error(condition:bool,message:String):
+static func dice_error(condition:bool,message:String,rolling_rules:Dictionary):
 	if(!condition):
 		push_error(message)
+		rolling_rules['error'] = true
+		rolling_rules['msg'].append(message)
 
 
-func roll_param(rolling_rules)->Dictionary:
+static func roll_param(rolling_rules,rng)->Dictionary:
+	var al = array_logic
 	print(rolling_rules)
 	var out:Dictionary = {}
 	var possible_dice = range(1,rolling_rules.dice_side+1)
