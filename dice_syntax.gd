@@ -8,7 +8,13 @@ static func dice_parser(dice_string:String)->Dictionary:
 	var sm = string_manip
 	var al = array_logic
 	
-	var rolling_rules: Dictionary = {'error': false, 'msg': []}
+	var rolling_rules: Dictionary = {'error': false, 
+	'msg': [],
+	'add':0,
+	'reroll_once': [],
+	'reroll': [],
+	'possible_dice': [],
+	'drop_dice':0}
 	var valid_tokens = '[dksr!]'
 	
 	dice_string = dice_string.to_lower()
@@ -22,6 +28,7 @@ static func dice_parser(dice_string:String)->Dictionary:
 		rolling_rules['sort'] = false
 		rolling_rules['explode'] = []
 		rolling_rules['compound'] = []
+		rolling_rules['possible_dice'] =[]
 		return rolling_rules
 	
 	
@@ -41,7 +48,7 @@ static func dice_parser(dice_string:String)->Dictionary:
 	valid_tokens + '.*?((?=' + valid_tokens + ')|$)')
 	
 	var dice_side = sm.str_extract(tokens[0],'(?<=d)[0-9]+')
-	dice_error(dice_side != null, "Malformed dice string",rolling_rules)
+	dice_error(dice_side != null, "Malformed dice string: Unable to detect dice sides",rolling_rules)
 	rolling_rules['dice_side'] = int(dice_side)
 	# remove dice side token to make sure it's not confused with the drop rule
 	tokens.remove(0)
@@ -60,14 +67,14 @@ static func dice_parser(dice_string:String)->Dictionary:
 		rolling_rules['drop_lowest'] = true
 	else:
 		var drop_count = sm.str_extract(tokens[drop_rules[0]], '[0-9]+$')
-		assert(drop_count!= null, 'Malformed dice string')
+		dice_error(drop_count!= null, 'Malformed dice string: No drop count provided',rolling_rules)
 		var drop_rule = tokens[drop_rules[0]]
 		match drop_rule.substr(0,1):
 			'd':
-				rolling_rules['drop_dice'] = drop_count
+				rolling_rules['drop_dice'] = int(drop_count)
 			'k':
-				rolling_rules['drop_dice'] = rolling_rules['dice_count']-drop_count	
-		rolling_rules['drop_lowest'] = !sm.str_detect(drop_rule,'dh') or sm.str_detect(drop_rule,'kl')
+				rolling_rules['drop_dice'] = int(rolling_rules['dice_count'])-int(drop_count)	
+		rolling_rules['drop_lowest'] = !(sm.str_detect(drop_rule,'dh') or sm.str_detect(drop_rule,'kl'))
 		tokens.remove(drop_rules[0])
 	
 	# reroll rules
@@ -98,7 +105,6 @@ static func dice_parser(dice_string:String)->Dictionary:
 		tokens.remove(i)
 	
 	
-	print(rolling_rules)
 	# new explode rules
 	var explode_rules = sm.strs_detect(tokens,'!')
 	var explode:Array = []
@@ -120,7 +126,16 @@ static func dice_parser(dice_string:String)->Dictionary:
 		tokens.remove(i)
 	
 	dice_error(tokens.size()==0, 'Malformed dice string: Unprocessed tokens',rolling_rules)
-	print(rolling_rules)
+	var possible_dice = range(1,rolling_rules.dice_side+1)
+	possible_dice = al.array_subset(possible_dice,al.which(al.array_not(al.array_in_array(possible_dice, rolling_rules.reroll))))
+	dice_error(possible_dice.size()>0,"Invalid dice: No possible results",rolling_rules)
+	dice_error(not al.all(al.array_in_array(possible_dice,rolling_rules.explode)),"Invalid dice: can't explode every result",rolling_rules)
+	dice_error(not al.all(al.array_in_array(possible_dice,rolling_rules.compound)),"Invalid dice: can't compound every result",rolling_rules)
+	rolling_rules['possible_dice'] = possible_dice
+	
+	dice_error(not (rolling_rules.explode.size()>0 and rolling_rules.compound.size()>0), "Invalid dice: can't explode and compound with the same dice",rolling_rules)
+		
+	
 	return rolling_rules
 
 static func range_determine(token:String,dice_side:int, default:int = 1)->Array:
@@ -140,6 +155,8 @@ static func range_determine(token:String,dice_side:int, default:int = 1)->Array:
 	
 	return out
 
+# add error information to the output if something goes wrong.
+# dictionaries are passed by reference
 static func dice_error(condition:bool,message:String,rolling_rules:Dictionary):
 	if(!condition):
 		push_error(message)
@@ -147,14 +164,126 @@ static func dice_error(condition:bool,message:String,rolling_rules:Dictionary):
 		rolling_rules['msg'].append(message)
 
 
-static func roll_param(rolling_rules,rng)->Dictionary:
+static func roll_param(rolling_rules:Dictionary,rng:RandomNumberGenerator)->Dictionary:
 	var al = array_logic
-	print(rolling_rules)
-	var out:Dictionary = {}
-	var possible_dice = range(1,rolling_rules.dice_side+1)
-	possible_dice = al.array_subset(possible_dice,al.which(al.array_not(al.array_in_array(possible_dice, rolling_rules.reroll))))
-	print(possible_dice)
+	var out:Dictionary = {'error': false,
+	 'msg': '',
+	'dice': [],
+	'drop': [],
+	'result':0}
+	
+	if rolling_rules.error:
+		out['error'] = true
+		out['msg'] = rolling_rules.msg
+		return out
+	
+	# setting the possible results with rerolls removed from possible results
+	var possible_dice = rolling_rules.possible_dice
+	
+	# initial roll
+	var dice = al.sample(possible_dice,rolling_rules.dice_count,rng)
+
+	
+	# reroll once
+	var to_reroll = al.which_in_array(dice,rolling_rules.reroll_once)
+
+	for i in to_reroll:
+		dice[i] = al.sample(possible_dice,1,rng)[0]
 	
 	
+	if rolling_rules.explode.size()>0:
+		var exploded_dice = []
+		for d in dice:
+			var x = d
+			exploded_dice.append(d)
+			while x in rolling_rules.explode:
+				x = al.sample(possible_dice,1,rng)[0]
+				# if new roll is in the reroll once list, reroll
+				if x in rolling_rules.reroll_once:
+					x = al.sample(possible_dice,1,rng)[0]
+				exploded_dice.append(x)
+		dice = exploded_dice
+	
+	if rolling_rules.compound.size()>0:
+		var compounded_dice = []
+		for d in dice:
+			var com_result = d
+			var x = d
+			while x in rolling_rules.compound:
+				x = al.sample(possible_dice,1,rng)[0]
+				if x in rolling_rules.reroll_once:
+					x = al.sample(possible_dice,1,rng)[0]
+				com_result += x
+			compounded_dice.append(com_result)
+		dice = compounded_dice
+	
+	if rolling_rules.sort:
+		dice.sort()
+	
+	if rolling_rules.drop_dice>0:
+		var ordered_dice = dice.duplicate()
+		ordered_dice.sort()
+		var drop = []
+		if !rolling_rules.drop_lowest:
+			ordered_dice.invert()
+		for i in range(0,rolling_rules.drop_dice):
+			drop.append(ordered_dice[i])
+		var new_dice = []
+		var drop_copy = drop.duplicate()
+		for x in dice:
+			if not x in drop_copy:
+				new_dice.append(x)
+			else:
+				drop_copy.remove(drop_copy.find(x))
+		dice = new_dice
+		out['drop'] = drop
+		
+	
+	
+	out['dice'] = dice
+	out['result'] = al.sum(dice)
+	
+	out['result'] += rolling_rules.add
 	
 	return out
+
+
+static func composite_dice_parser(dice:String)->Dictionary:
+	var sm = string_manip
+	
+	var dice_components = sm.str_split(dice,'\\+|-')
+	var string_signs = sm.str_extract_all(dice,'\\+|-')
+	var component_signs = []
+	if dice.begins_with('-'):
+		dice_components.remove(0)
+	elif dice.begins_with('+'):
+		dice_components.remove(0)
+	else:
+		component_signs.append(1)
+	
+	for i in range(string_signs.size()):
+		component_signs.append(int(string_signs[i] + '1'))
+	var rules_array = []
+	
+	for x in dice_components:
+		var rr = dice_parser(x)
+		rules_array.append(rr)
+	
+	return {'rules_array': rules_array, 'signs':component_signs}
+
+static func roll(dice:String,rng:RandomNumberGenerator,return_rolls = true):
+	var results:Array
+	var rules = composite_dice_parser(dice)
+	for i in range(rules.rules_array.size()):
+		var result = roll_param(rules.rules_array[i],rng)
+		result.result *= rules.signs[i]
+		results.append(result)
+	
+	var sum = 0
+	for x in results:
+		sum += x.result
+	
+	var out = {'result':sum, 'rolls':results}
+	
+	return out
+	
